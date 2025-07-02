@@ -49,6 +49,18 @@ const tools = [
         required: ["command"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "done",
+      description: "Mark the task as complete and end the iteration",
+      parameters: {
+        type: "object",
+        properties: { summary: { type: "string", description: "A summary of what was accomplished" } },
+        required: ["summary"]
+      }
+    }
   }
 ];
 
@@ -70,49 +82,95 @@ async function run_command({ command }) {
   return stderr ? `ERR: ${stderr}` : stdout;
 }
 
-const toolHandlers = { read_file, write_file, run_command };
+async function done({ summary }) {
+  return `Task completed: ${summary}`;
+}
+
+const toolHandlers = { read_file, write_file, run_command, done };
 
 // --- Agent loop function ---
 async function agent(userInput, workingDir = process.cwd()) {
-  const messages = [{ role: "system", content: "You are an AI coding assistant." }];
+  const messages = [{ role: "system", content: "You are an AI coding assistant. When you have completed the task, use the 'done' tool to summarize what you accomplished." }];
 
   messages.push({ role: "user", content: userInput });
 
-  const res = await openai.chat.completions.create({
-    model: "gpt-41",
-    tools,
-    messages,
-    tool_choice: "auto"
-  });
+  let isTaskComplete = false;
+  let turnCount = 0;
+  const maxTurns = 10; // Safety limit to prevent infinite loops
 
-  const msg = res.choices[0].message;
-  if (msg.tool_calls) {
-    messages.push(msg);
+  while (!isTaskComplete && turnCount < maxTurns) {
+    turnCount++;
+    console.log(`--- Turn ${turnCount} ---`);
+
+    const res = await openai.chat.completions.create({
+      model: "gpt-41",
+      tools,
+      messages,
+      tool_choice: "auto"
+    });
+
+    const msg = res.choices[0].message;
     
-    for (const toolCall of msg.tool_calls) {
-      const name = toolCall.function.name;
-      const args = JSON.parse(toolCall.function.arguments);
+    if (msg.tool_calls) {
+      messages.push(msg);
       
-      // Set working directory for file operations
-      const originalCwd = process.cwd();
-      process.chdir(workingDir);
-      
-      try {
-        const result = await toolHandlers[name](args);
-        messages.push({ 
-          role: "tool", 
-          tool_call_id: toolCall.id, 
-          content: result 
-        });
-      } finally {
-        process.chdir(originalCwd);
+      for (const toolCall of msg.tool_calls) {
+        const name = toolCall.function.name;
+        const args = JSON.parse(toolCall.function.arguments);
+        
+        // Check if this is the done tool
+        if (name === "done") {
+          console.log("Agent marked task as complete:", args.summary);
+          isTaskComplete = true;
+          messages.push({ 
+            role: "tool", 
+            tool_call_id: toolCall.id, 
+            content: `Task completed: ${args.summary}` 
+          });
+          break;
+        }
+        
+        // Set working directory for file operations
+        const originalCwd = process.cwd();
+        process.chdir(workingDir);
+        
+        try {
+          const result = await toolHandlers[name](args);
+          console.log(`Tool ${name} result:`, result);
+          messages.push({ 
+            role: "tool", 
+            tool_call_id: toolCall.id, 
+            content: result 
+          });
+        } finally {
+          process.chdir(originalCwd);
+        }
       }
-    }
 
-    const res2 = await openai.chat.completions.create({ model: "gpt-41", messages });
-    console.log(res2.choices[0].message.content);
-  } else {
-    console.log(msg.content);
+      // Only continue if task is not complete
+      if (!isTaskComplete) {
+        const res2 = await openai.chat.completions.create({ 
+          model: "gpt-41", 
+          messages 
+        });
+        console.log("Agent response:", res2.choices[0].message.content);
+        messages.push(res2.choices[0].message);
+      }
+    } else {
+      console.log("Agent response:", msg.content);
+      messages.push(msg);
+      // If no tool calls and no done signal, the agent might be waiting for more input
+      // We'll break here to avoid infinite loops
+      break;
+    }
+  }
+
+  if (turnCount >= maxTurns) {
+    console.log("Maximum number of turns reached. Task may not be complete.");
+  }
+
+  if (isTaskComplete) {
+    console.log("Task completed successfully!");
   }
 }
 
