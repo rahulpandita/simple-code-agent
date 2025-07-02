@@ -3,7 +3,12 @@ import { readFile, writeFile } from "fs/promises";
 import { exec } from "child_process";
 import util from "util";
 import path from "path";
+import { fileURLToPath } from "url";
 import dotenv from "dotenv";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 dotenv.config({ path: '.env.local' });
 
 const openai = new OpenAI({ 
@@ -67,19 +72,50 @@ const tools = [
 // --- Implementations ---
 async function read_file({ path: filePath }) {
   const full = path.resolve(process.cwd(), filePath);
-  const txt = await readFile(full, "utf8");
-  return txt;
+  try {
+    const txt = await readFile(full, "utf8");
+    return txt;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return `Error: File '${filePath}' does not exist.`;
+    } else if (error.code === 'EACCES') {
+      return `Error: Permission denied accessing '${filePath}'.`;
+    } else {
+      return `Error reading file '${filePath}': ${error.message}`;
+    }
+  }
 }
 
 async function write_file({ path: filePath, content }) {
   const full = path.resolve(process.cwd(), filePath);
-  await writeFile(full, content, "utf8");
-  return `Wrote ${content.length} bytes to ${filePath}`;
+  try {
+    await writeFile(full, content, "utf8");
+    return `Wrote ${content.length} bytes to ${filePath}`;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return `Error: Directory for '${filePath}' does not exist. Please create the directory first.`;
+    } else if (error.code === 'EACCES') {
+      return `Error: Permission denied writing to '${filePath}'.`;
+    } else if (error.code === 'ENOSPC') {
+      return `Error: No space left on device when writing to '${filePath}'.`;
+    } else if (error.code === 'EISDIR') {
+      return `Error: '${filePath}' is a directory, not a file.`;
+    } else if (error.code === 'EROFS') {
+      return `Error: File system is read-only, cannot write to '${filePath}'.`;
+    } else {
+      return `Error writing file '${filePath}': ${error.message}`;
+    }
+  }
 }
 
 async function run_command({ command }) {
-  const { stdout, stderr } = await execAsync(command, { cwd: process.cwd() });
-  return stderr ? `ERR: ${stderr}` : stdout;
+  try {
+    const { stdout, stderr } = await execAsync(command, { cwd: process.cwd() });
+    return stderr ? `STDERR: ${stderr}\nSTDOUT: ${stdout}` : stdout;
+  } catch (error) {
+    // Command failed (non-zero exit code)
+    return `Command failed with exit code ${error.code}:\nSTDOUT: ${error.stdout || ''}\nSTDERR: ${error.stderr || ''}\nError: ${error.message}`;
+  }
 }
 
 async function done({ summary }) {
@@ -90,7 +126,17 @@ const toolHandlers = { read_file, write_file, run_command, done };
 
 // --- Agent loop function ---
 async function agent(userInput, workingDir = process.cwd()) {
-  const messages = [{ role: "system", content: "You are an AI coding assistant. When you have completed the task, use the 'done' tool to summarize what you accomplished." }];
+  // Read system prompt from file
+  let systemPrompt;
+  try {
+    const systemPromptPath = path.resolve(__dirname, 'system_prompt.txt');
+    systemPrompt = await readFile(systemPromptPath, 'utf8');
+  } catch (error) {
+    // Fallback to default system prompt if file doesn't exist
+    systemPrompt = "You are an AI coding assistant. First try to list the contents of the repository to understand the structure before taking actions. When you have completed the task, use the 'done' tool to summarize what you accomplished.";
+  }
+
+  const messages = [{ role: "system", content: systemPrompt }];
 
   messages.push({ role: "user", content: userInput });
 

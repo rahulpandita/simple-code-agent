@@ -7,6 +7,8 @@ A basic AI-powered code agent that can read files, write files, and execute shel
 - **File Operations**: Read and write files in any repository
 - **Command Execution**: Run shell commands and capture output
 - **AI-Powered**: Uses OpenAI GPT models with function calling
+- **Multi-turn Conversations**: Agent can perform multiple actions in sequence until task completion
+- **Error Handling**: Gracefully handles command failures and provides detailed error information
 - **Custom Endpoints**: Supports Azure OpenAI endpoints
 - **Repository Aware**: Works with any local repository path
 
@@ -55,11 +57,12 @@ node agent.js /path/to/project "Analyze the code structure and suggest improveme
 
 ## Available Tools
 
-The agent has access to three main tools:
+The agent has access to four main tools:
 
 1. **read_file**: Read the contents of any file in the repository
 2. **write_file**: Create or overwrite files with new content
-3. **run_command**: Execute shell commands and capture their output
+3. **run_command**: Execute shell commands and capture their output (handles both successful and failed commands)
+4. **done**: Mark a task as complete with a summary (used internally by the agent)
 
 ## Requirements
 
