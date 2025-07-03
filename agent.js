@@ -13,6 +13,140 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: '.env.local' });
 
+// Configuration constants
+const CONFIG = {
+  // Timeout settings (in milliseconds)
+  TIMEOUTS: {
+    API_REQUEST: parseInt(process.env.API_TIMEOUT) || 60000,        // 60 seconds
+    WEB_REQUEST: parseInt(process.env.WEB_TIMEOUT) || 30000,        // 30 seconds
+    COMMAND_EXECUTION: parseInt(process.env.COMMAND_TIMEOUT) || 120000, // 2 minutes
+    IMAGE_ANALYSIS: parseInt(process.env.IMAGE_TIMEOUT) || 90000,   // 90 seconds
+  },
+  
+  // Retry settings
+  RETRY: {
+    MAX_ATTEMPTS: parseInt(process.env.MAX_RETRY_ATTEMPTS) || 3,
+    BASE_DELAY: parseInt(process.env.RETRY_BASE_DELAY) || 1000,     // 1 second
+    MAX_DELAY: parseInt(process.env.RETRY_MAX_DELAY) || 30000,      // 30 seconds
+    BACKOFF_MULTIPLIER: parseFloat(process.env.RETRY_BACKOFF_MULTIPLIER) || 2,
+  }
+};
+
+// Utility function for exponential backoff delay
+function calculateDelay(attempt, baseDelay = CONFIG.RETRY.BASE_DELAY, multiplier = CONFIG.RETRY.BACKOFF_MULTIPLIER, maxDelay = CONFIG.RETRY.MAX_DELAY) {
+  const delay = baseDelay * Math.pow(multiplier, attempt - 1);
+  return Math.min(delay, maxDelay);
+}
+
+// Sleep utility
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Generic retry wrapper with exponential backoff
+async function withRetry(operation, options = {}) {
+  const {
+    maxAttempts = CONFIG.RETRY.MAX_ATTEMPTS,
+    baseDelay = CONFIG.RETRY.BASE_DELAY,
+    multiplier = CONFIG.RETRY.BACKOFF_MULTIPLIER,
+    maxDelay = CONFIG.RETRY.MAX_DELAY,
+    shouldRetry = (error) => true, // Default: retry on any error
+    onRetry = (error, attempt) => console.log(`Retry attempt ${attempt} after error: ${error.message}`)
+  } = options;
+
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      
+      // Don't retry on the last attempt or if shouldRetry returns false
+      if (attempt === maxAttempts || !shouldRetry(error)) {
+        throw error;
+      }
+      
+      const delay = calculateDelay(attempt, baseDelay, multiplier, maxDelay);
+      onRetry(error, attempt);
+      await sleep(delay);
+    }
+  }
+  
+  throw lastError;
+}
+
+// Enhanced fetch with timeout and retry
+async function fetchWithRetry(url, options = {}) {
+  const {
+    timeout = CONFIG.TIMEOUTS.WEB_REQUEST,
+    retryOptions = {},
+    ...fetchOptions
+  } = options;
+
+  return withRetry(async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+      const response = await fetch(url, {
+        ...fetchOptions,
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      // Check if response is ok, throw error for bad status codes that should be retried
+      if (!response.ok && response.status >= 500) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      
+      // Transform abort error to timeout error
+      if (error.name === 'AbortError') {
+        throw new Error(`Request timeout after ${timeout}ms`);
+      }
+      
+      throw error;
+    }
+  }, {
+    ...retryOptions,
+    shouldRetry: (error) => {
+      // Retry on network errors, timeouts, and 5xx status codes
+      return error.message.includes('timeout') || 
+             error.message.includes('ECONNRESET') ||
+             error.message.includes('ENOTFOUND') ||
+             error.message.includes('ECONNREFUSED') ||
+             error.message.includes('HTTP 5');
+    }
+  });
+}
+
+// Enhanced OpenAI API call with retry
+async function openaiWithRetry(operation, options = {}) {
+  return withRetry(operation, {
+    ...options,
+    shouldRetry: (error) => {
+      // Retry on rate limits, network errors, and 5xx status codes
+      return error.status === 429 || // Rate limit
+             error.status >= 500 ||   // Server errors
+             error.code === 'ECONNRESET' ||
+             error.code === 'ENOTFOUND' ||
+             error.message.includes('timeout');
+    },
+    onRetry: (error, attempt) => {
+      if (error.status === 429) {
+        console.log(`Rate limited, retry attempt ${attempt} after backoff`);
+      } else {
+        console.log(`API error, retry attempt ${attempt}: ${error.message}`);
+      }
+    }
+  });
+}
+
 const openai = new OpenAI({ 
   apiKey: process.env.AZURE_GPT41_API_KEY,
   baseURL: process.env.AZURE_GPT41_ENDPOINT ? 
@@ -154,9 +288,17 @@ async function write_file({ path: filePath, content }) {
 
 async function run_command({ command }) {
   try {
-    const { stdout, stderr } = await execAsync(command, { cwd: process.cwd() });
+    const { stdout, stderr } = await execAsync(command, { 
+      cwd: process.cwd(),
+      timeout: CONFIG.TIMEOUTS.COMMAND_EXECUTION
+    });
     return stderr ? `STDERR: ${stderr}\nSTDOUT: ${stdout}` : stdout;
   } catch (error) {
+    // Handle timeout specifically
+    if (error.signal === 'SIGTERM' && error.killed) {
+      return `Command timed out after ${CONFIG.TIMEOUTS.COMMAND_EXECUTION}ms: ${command}`;
+    }
+    
     // Command failed (non-zero exit code)
     return `Command failed with exit code ${error.code}:\nSTDOUT: ${error.stdout || ''}\nSTDERR: ${error.stderr || ''}\nError: ${error.message}`;
   }
@@ -170,12 +312,13 @@ async function webresearch({ query }) {
   try {
     console.log(`Performing web search for: ${query}`);
     
-    // Perform DuckDuckGo search
+    // Perform DuckDuckGo search with retry
     const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const searchResponse = await fetch(searchUrl, {
+    const searchResponse = await fetchWithRetry(searchUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
+      },
+      timeout: CONFIG.TIMEOUTS.WEB_REQUEST
     });
     
     if (!searchResponse.ok) {
@@ -202,16 +345,20 @@ async function webresearch({ query }) {
       return `No search results found for query: ${query}`;
     }
     
-    // Fetch and summarize the content of each result
+    // Fetch and summarize the content of each result with retry and timeout
     const summaries = [];
     for (const result of results) {
       try {
         console.log(`Fetching content from: ${result.url}`);
-        const contentResponse = await fetch(result.url, {
+        const contentResponse = await fetchWithRetry(result.url, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
           },
-          timeout: 10000
+          timeout: CONFIG.TIMEOUTS.WEB_REQUEST,
+          retryOptions: {
+            maxAttempts: 2, // Fewer retries for content fetching to avoid delays
+            onRetry: (error, attempt) => console.log(`Retrying fetch for ${result.url}, attempt ${attempt}: ${error.message}`)
+          }
         });
         
         if (contentResponse.ok) {
@@ -250,7 +397,7 @@ async function webresearch({ query }) {
       }
     }
     
-    // Generate summary using OpenAI
+    // Generate summary using OpenAI with retry
     const summaryPrompt = `Summarize the following web search results for the query "${query}". Provide a concise summary that captures the key information from all sources:
 
 ${summaries.map((s, i) => `
@@ -261,11 +408,15 @@ Content: ${s.content}
 
 Please provide a comprehensive summary that synthesizes the information from these sources:`;
 
-    const summaryResponse = await openai.chat.completions.create({
-      model: "gpt-41",
-      messages: [{ role: "user", content: summaryPrompt }],
-      max_tokens: 500
-    });
+    const summaryResponse = await openaiWithRetry(() => 
+      openai.chat.completions.create({
+        model: "gpt-41",
+        messages: [{ role: "user", content: summaryPrompt }],
+        max_tokens: 500
+      }), {
+        onRetry: (error, attempt) => console.log(`Retrying OpenAI summary generation, attempt ${attempt}: ${error.message}`)
+      }
+    );
     
     const summary = summaryResponse.choices[0].message.content;
     
@@ -289,11 +440,29 @@ async function analyze_image({ path: imagePath, prompt = "Describe this image in
     
     // Check if it's a URL or file path
     if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-      // Handle web URLs
-      imageContent = {
-        type: "image_url",
-        image_url: { url: imagePath }
-      };
+      // Handle web URLs - validate and fetch with retry
+      try {
+        // Test if URL is accessible
+        const testResponse = await fetchWithRetry(imagePath, {
+          method: 'HEAD',
+          timeout: CONFIG.TIMEOUTS.WEB_REQUEST,
+          retryOptions: {
+            maxAttempts: 2,
+            onRetry: (error, attempt) => console.log(`Retrying image URL check, attempt ${attempt}: ${error.message}`)
+          }
+        });
+        
+        if (!testResponse.ok) {
+          return `Error: Image URL returned status ${testResponse.status}: ${imagePath}`;
+        }
+        
+        imageContent = {
+          type: "image_url",
+          image_url: { url: imagePath }
+        };
+      } catch (error) {
+        return `Error: Failed to access image URL '${imagePath}': ${error.message}`;
+      }
     } else {
       // Handle local file paths
       const full = path.resolve(process.cwd(), imagePath);
@@ -340,12 +509,16 @@ async function analyze_image({ path: imagePath, prompt = "Describe this image in
       }
     ];
     
-    // Use gpt-4-vision-preview which maps to your gpt-4.1 model
-    const response = await openai.chat.completions.create({
-      model: "gpt-4-vision-preview",
-      messages: messages,
-      max_tokens: 500
-    });
+    // Use gpt-4-vision-preview with retry logic
+    const response = await openaiWithRetry(() =>
+      openai.chat.completions.create({
+        model: "gpt-4-vision-preview",
+        messages: messages,
+        max_tokens: 500
+      }), {
+        onRetry: (error, attempt) => console.log(`Retrying image analysis, attempt ${attempt}: ${error.message}`)
+      }
+    );
     
     const analysis = response.choices[0].message.content;
     return `Image Analysis: ${analysis}`;
@@ -365,12 +538,13 @@ async function image_search_analysis({ query, analysis_prompt = "Describe and an
   try {
     console.log(`Performing image search for: ${query}`);
     
-    // Perform DuckDuckGo image search
+    // Perform DuckDuckGo image search with retry
     const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}&t=h_&iax=images&ia=images`;
-    const searchResponse = await fetch(searchUrl, {
+    const searchResponse = await fetchWithRetry(searchUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
+      },
+      timeout: CONFIG.TIMEOUTS.WEB_REQUEST
     });
     
     if (!searchResponse.ok) {
@@ -419,9 +593,14 @@ async function image_search_analysis({ query, analysis_prompt = "Describe and an
       // Try alternative approach with direct image search API-style URL
       const altSearchUrl = `https://duckduckgo.com/i.js?q=${encodeURIComponent(query)}&o=json`;
       try {
-        const altResponse = await fetch(altSearchUrl, {
+        const altResponse = await fetchWithRetry(altSearchUrl, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+          },
+          timeout: CONFIG.TIMEOUTS.WEB_REQUEST,
+          retryOptions: {
+            maxAttempts: 2,
+            onRetry: (error, attempt) => console.log(`Retrying alternative image search, attempt ${attempt}: ${error.message}`)
           }
         });
         
@@ -448,7 +627,7 @@ async function image_search_analysis({ query, analysis_prompt = "Describe and an
     
     console.log(`Found ${imageUrls.length} images to analyze`);
     
-    // Analyze each image
+    // Analyze each image with retry logic
     const analyses = [];
     for (let i = 0; i < Math.min(imageUrls.length, 3); i++) {
       const imageUrl = imageUrls[i];
@@ -472,12 +651,17 @@ async function image_search_analysis({ query, analysis_prompt = "Describe and an
           }
         ];
         
-        // Use gpt-4-vision-preview which maps to your gpt-4.1 model
-        const response = await openai.chat.completions.create({
-          model: "gpt-4-vision-preview",
-          messages: messages,
-          max_tokens: 400
-        });
+        // Use gpt-4-vision-preview with retry logic
+        const response = await openaiWithRetry(() =>
+          openai.chat.completions.create({
+            model: "gpt-4-vision-preview",
+            messages: messages,
+            max_tokens: 400
+          }), {
+            maxAttempts: 2, // Fewer retries for individual images
+            onRetry: (error, attempt) => console.log(`Retrying analysis for image ${i + 1}, attempt ${attempt}: ${error.message}`)
+          }
+        );
         
         const analysis = response.choices[0].message.content;
         analyses.push({
@@ -496,7 +680,7 @@ async function image_search_analysis({ query, analysis_prompt = "Describe and an
       }
     }
     
-    // Generate combined summary
+    // Generate combined summary using OpenAI with retry
     const summaryPrompt = `Based on the following image analyses for the search query "${query}", provide a comprehensive summary that synthesizes insights from all images:
 
 ${analyses.map(a => `
@@ -506,11 +690,15 @@ Analysis: ${a.analysis}
 
 Please provide a comprehensive summary that identifies patterns, themes, and key insights across these images:`;
 
-    const summaryResponse = await openai.chat.completions.create({
-      model: "gpt-41",
-      messages: [{ role: "user", content: summaryPrompt }],
-      max_tokens: 400
-    });
+    const summaryResponse = await openaiWithRetry(() =>
+      openai.chat.completions.create({
+        model: "gpt-41",
+        messages: [{ role: "user", content: summaryPrompt }],
+        max_tokens: 400
+      }), {
+        onRetry: (error, attempt) => console.log(`Retrying combined summary generation, attempt ${attempt}: ${error.message}`)
+      }
+    );
     
     const combinedSummary = summaryResponse.choices[0].message.content;
     
@@ -556,10 +744,14 @@ ${userInput}
 
 Please provide an enhanced, more detailed version of the user request:`;
 
-  const enhancementResponse = await openai.chat.completions.create({
-    model: "gpt-41",
-    messages: [{ role: "user", content: enhancementPrompt }]
-  });
+  const enhancementResponse = await openaiWithRetry(() =>
+    openai.chat.completions.create({
+      model: "gpt-41",
+      messages: [{ role: "user", content: enhancementPrompt }]
+    }), {
+      onRetry: (error, attempt) => console.log(`Retrying prompt enhancement, attempt ${attempt}: ${error.message}`)
+    }
+  );
 
   const enhancedUserInput = enhancementResponse.choices[0].message.content;
   console.log("Enhanced prompt:", enhancedUserInput);
@@ -577,12 +769,16 @@ Please provide an enhanced, more detailed version of the user request:`;
     turnCount++;
     console.log(`--- Turn ${turnCount} ---`);
 
-    const res = await openai.chat.completions.create({
-      model: "gpt-41",
-      tools,
-      messages,
-      tool_choice: "auto"
-    });
+    const res = await openaiWithRetry(() =>
+      openai.chat.completions.create({
+        model: "gpt-41",
+        tools,
+        messages,
+        tool_choice: "auto"
+      }), {
+        onRetry: (error, attempt) => console.log(`Retrying main agent call (turn ${turnCount}), attempt ${attempt}: ${error.message}`)
+      }
+    );
 
     const msg = res.choices[0].message;
     
@@ -624,10 +820,14 @@ Please provide an enhanced, more detailed version of the user request:`;
 
       // Only continue if task is not complete
       if (!isTaskComplete) {
-        const res2 = await openai.chat.completions.create({ 
-          model: "gpt-41", 
-          messages 
-        });
+        const res2 = await openaiWithRetry(() =>
+          openai.chat.completions.create({ 
+            model: "gpt-41", 
+            messages 
+          }), {
+            onRetry: (error, attempt) => console.log(`Retrying follow-up response (turn ${turnCount}), attempt ${attempt}: ${error.message}`)
+          }
+        );
         console.log("Agent response:", res2.choices[0].message.content);
         messages.push(res2.choices[0].message);
       }
