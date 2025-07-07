@@ -29,6 +29,13 @@ const CONFIG = {
     BASE_DELAY: parseInt(process.env.RETRY_BASE_DELAY) || 1000,     // 1 second
     MAX_DELAY: parseInt(process.env.RETRY_MAX_DELAY) || 30000,      // 30 seconds
     BACKOFF_MULTIPLIER: parseFloat(process.env.RETRY_BACKOFF_MULTIPLIER) || 2,
+  },
+  
+  // Azure settings
+  AZURE: {
+    API_VERSION: process.env.AZURE_API_VERSION,
+    GPT_API_KEY: process.env.AZURE_GPT_API_KEY,
+    GPT_ENDPOINT: process.env.AZURE_GPT_ENDPOINT,
   }
 };
 
@@ -148,12 +155,10 @@ async function openaiWithRetry(operation, options = {}) {
 }
 
 const openai = new OpenAI({ 
-  apiKey: process.env.AZURE_GPT41_API_KEY,
-  baseURL: process.env.AZURE_GPT41_ENDPOINT ? 
-    process.env.AZURE_GPT41_ENDPOINT.replace('/chat/completions?api-version=2025-01-01-preview', '') :
-    undefined,
-  defaultQuery: process.env.AZURE_GPT41_ENDPOINT ? { 'api-version': '2025-01-01-preview' } : undefined,
-  defaultHeaders: process.env.AZURE_GPT41_ENDPOINT ? { 'api-key': process.env.AZURE_GPT41_API_KEY } : undefined
+  apiKey: CONFIG.AZURE.GPT_API_KEY,
+  baseURL: CONFIG.AZURE.GPT_ENDPOINT,
+  defaultQuery: CONFIG.AZURE.GPT_ENDPOINT ? { 'api-version': CONFIG.AZURE.API_VERSION } : undefined,
+  defaultHeaders: CONFIG.AZURE.GPT_ENDPOINT ? { 'api-key': CONFIG.AZURE.GPT_API_KEY } : undefined
 });
 const execAsync = util.promisify(exec);
 

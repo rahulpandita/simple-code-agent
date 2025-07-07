@@ -25,8 +25,8 @@ A basic AI-powered code agent that can read files, write files, and execute shel
 
 2. Configure your environment by creating a `.env.local` file:
    ```bash
-   AZURE_GPT41_ENDPOINT=https://your-azure-endpoint.openai.azure.com/openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview
-   AZURE_GPT41_API_KEY=your_api_key_here
+   AZURE_GPT_ENDPOINT=https://your-azure-endpoint.openai.azure.com/openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview
+   AZURE_GPT_API_KEY=your_api_key_here
    ```
 
    Optional timeout and retry configuration:
