@@ -2,9 +2,14 @@
   "name": "simple-code-agent",
   "version": "1.0.0",
   "description": "Basic code agent",
-  "main": "index.js",
+  "main": "dist/agent.js",
   "type": "module",
   "scripts": {
+    "build": "tsc",
+    "start": "node dist/agent.js",
+    "dev": "tsx src/agent.ts",
+    "clean": "rm -rf dist",
+    "build:watch": "tsc --watch",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -17,5 +22,11 @@
     "fs": "^0.0.1-security",
     "node-fetch": "^3.3.2",
     "openai": "^5.8.2"
+  },
+  "devDependencies": {
+    "@types/cheerio": "^0.22.35",
+    "@types/node": "^24.0.14",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
   }
 }
