@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 
 // Load environment variables
-dotenv.config({ path: '.env.local' });
+dotenv.config({ path: ".env.local" });
 
 // Configuration interfaces
 export interface TimeoutConfig {
@@ -43,24 +43,24 @@ export interface RetryOptions {
 export const CONFIG: Config = {
   // Timeout settings (in milliseconds)
   TIMEOUTS: {
-    API_REQUEST: parseInt(process.env.API_TIMEOUT || "60000"),        // 60 seconds
-    WEB_REQUEST: parseInt(process.env.WEB_TIMEOUT || "30000"),        // 30 seconds
+    API_REQUEST: parseInt(process.env.API_TIMEOUT || "60000"), // 60 seconds
+    WEB_REQUEST: parseInt(process.env.WEB_TIMEOUT || "30000"), // 30 seconds
     COMMAND_EXECUTION: parseInt(process.env.COMMAND_TIMEOUT || "120000"), // 2 minutes
-    IMAGE_ANALYSIS: parseInt(process.env.IMAGE_TIMEOUT || "90000"),   // 90 seconds
+    IMAGE_ANALYSIS: parseInt(process.env.IMAGE_TIMEOUT || "90000") // 90 seconds
   },
-  
+
   // Retry settings
   RETRY: {
     MAX_ATTEMPTS: parseInt(process.env.MAX_RETRY_ATTEMPTS || "3"),
-    BASE_DELAY: parseInt(process.env.RETRY_BASE_DELAY || "1000"),     // 1 second
-    MAX_DELAY: parseInt(process.env.RETRY_MAX_DELAY || "30000"),      // 30 seconds
-    BACKOFF_MULTIPLIER: parseFloat(process.env.RETRY_BACKOFF_MULTIPLIER || "2"),
+    BASE_DELAY: parseInt(process.env.RETRY_BASE_DELAY || "1000"), // 1 second
+    MAX_DELAY: parseInt(process.env.RETRY_MAX_DELAY || "30000"), // 30 seconds
+    BACKOFF_MULTIPLIER: parseFloat(process.env.RETRY_BACKOFF_MULTIPLIER || "2")
   },
-  
+
   // Azure settings
   AZURE: {
     API_VERSION: process.env.AZURE_API_VERSION,
     GPT_API_KEY: process.env.AZURE_GPT_API_KEY,
-    GPT_ENDPOINT: process.env.AZURE_GPT_ENDPOINT,
+    GPT_ENDPOINT: process.env.AZURE_GPT_ENDPOINT
   }
 };

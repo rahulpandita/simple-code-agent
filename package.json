@@ -5,11 +5,19 @@
   "main": "dist/agent.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "npm run lint && npm run type-check && npm run compile",
+    "compile": "tsc",
     "start": "node dist/agent.js",
     "dev": "tsx src/agent.ts",
     "clean": "rm -rf dist",
     "build:watch": "tsc --watch",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write src/**/*.ts",
+    "format:check": "prettier --check src/**/*.ts",
+    "type-check": "tsc --noEmit",
+    "check": "npm run lint && npm run type-check && npm run format:check",
+    "fix": "npm run lint:fix && npm run format",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -24,9 +32,16 @@
     "openai": "^5.8.2"
   },
   "devDependencies": {
+    "@eslint/js": "^9.31.0",
     "@types/cheerio": "^0.22.35",
     "@types/node": "^24.0.14",
+    "@typescript-eslint/eslint-plugin": "^8.37.0",
+    "@typescript-eslint/parser": "^8.37.0",
+    "eslint": "^9.31.0",
+    "eslint-config-prettier": "^10.1.5",
+    "prettier": "^3.6.2",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.37.0"
   }
 }
