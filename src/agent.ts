@@ -1,12 +1,11 @@
 import type { ChatCompletionMessageParam, ChatCompletion } from "openai/resources/chat/completions";
-import type { RequestInit as NodeFetchRequestInit } from "node-fetch";
 import OpenAI from "openai";
 import { readFile, writeFile, stat } from "fs/promises";
 import { exec } from "child_process";
 import util from "util";
 import path from "path";
 import { fileURLToPath } from "url";
-import fetch from "node-fetch";
+import fetch, { type RequestInit as NodeFetchRequestInit } from "node-fetch";
 import * as cheerio from "cheerio";
 import { CONFIG, type RetryOptions } from "./config.js";
 import type {
@@ -39,11 +38,6 @@ function calculateDelay(
   return Math.min(delay, maxDelay);
 }
 
-// Sleep utility
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 // Generic retry wrapper with exponential backoff
 function withRetry<T>(operation: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
   const {
@@ -56,16 +50,12 @@ function withRetry<T>(operation: () => Promise<T>, options: RetryOptions = {}): 
       console.log(`Retry attempt ${attempt} after error: ${(error as Error).message}`)
   } = options;
 
-  let lastError: unknown;
-
   return new Promise((resolve, reject) => {
     const attemptOperation = async (attempt: number): Promise<void> => {
       try {
         const result = await operation();
         resolve(result);
       } catch (error) {
-        lastError = error;
-
         // Don't retry on the last attempt or if shouldRetry returns false
         if (attempt === maxAttempts || !shouldRetry(error)) {
           reject(error);
@@ -74,11 +64,13 @@ function withRetry<T>(operation: () => Promise<T>, options: RetryOptions = {}): 
 
         const delay = calculateDelay(attempt, baseDelay, multiplier, maxDelay);
         onRetry(error, attempt);
-        setTimeout(() => attemptOperation(attempt + 1), delay);
+        setTimeout(() => {
+          void attemptOperation(attempt + 1);
+        }, delay);
       }
     };
 
-    attemptOperation(1);
+    void attemptOperation(1);
   });
 }
 
@@ -142,10 +134,10 @@ function openaiWithRetry<T>(operation: () => Promise<T>, options: RetryOptions =
       // Retry on rate limits, network errors, and 5xx status codes
       return Boolean(
         err.status === 429 || // Rate limit
-          (err.status !== undefined && err.status >= 500) || // Server errors
-          err.code === "ECONNRESET" ||
-          err.code === "ENOTFOUND" ||
-          (err.message?.includes("timeout"))
+        (err.status !== undefined && err.status >= 500) || // Server errors
+        err.code === "ECONNRESET" ||
+        err.code === "ENOTFOUND" ||
+        (err.message?.includes("timeout"))
       );
     },
     onRetry: (error: unknown, attempt: number) => {
@@ -329,12 +321,15 @@ async function run_command({ command }: RunCommandParams): Promise<string> {
     }
 
     // Command failed (non-zero exit code)
-    return `Command failed with exit code ${err.code ?? "unknown"}:\nSTDOUT: ${err.stdout ?? ""}\nSTDERR: ${err.stderr ?? ""}\nError: ${err.message ?? "Unknown error"}`;
+    return `Command failed with exit code ${err.code ?? "unknown"}:\n` +
+      `STDOUT: ${err.stdout ?? ""}\n` +
+      `STDERR: ${err.stderr ?? ""}\n` +
+      `Error: ${err.message ?? "Unknown error"}`;
   }
 }
 
-async function done({ summary }: DoneParams): Promise<string> {
-  return `Task completed: ${summary}`;
+function done({ summary }: DoneParams): Promise<string> {
+  return Promise.resolve(`Task completed: ${summary}`);
 }
 
 async function webresearch({ query }: WebresearchParams): Promise<string> {
@@ -346,7 +341,8 @@ async function webresearch({ query }: WebresearchParams): Promise<string> {
     const searchResponse = await fetchWithRetry(searchUrl, {
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
       },
       timeout: CONFIG.TIMEOUTS.WEB_REQUEST
     });
@@ -365,7 +361,7 @@ async function webresearch({ query }: WebresearchParams): Promise<string> {
       .each((index, element) => {
         const $result = $(element);
         const title = $result.find(".result__title a").text().trim();
-        const url = $result.find(".result__url").attr("href") || $result.find(".result__title a").attr("href");
+        const url = $result.find(".result__url").attr("href") ?? $result.find(".result__title a").attr("href");
         const snippet = $result.find(".result__snippet").text().trim();
 
         if (title && url) {
@@ -385,7 +381,8 @@ async function webresearch({ query }: WebresearchParams): Promise<string> {
         const contentResponse = await fetchWithRetry(result.url, {
           headers: {
             "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+              "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
           },
           timeout: CONFIG.TIMEOUTS.WEB_REQUEST,
           retryOptions: {
@@ -432,7 +429,8 @@ async function webresearch({ query }: WebresearchParams): Promise<string> {
     }
 
     // Generate summary using OpenAI with retry
-    const summaryPrompt = `Summarize the following web search results for the query "${query}". Provide a concise summary that captures the key information from all sources:
+    const summaryPrompt = `Summarize the following web search results for the query "${query}". ` +
+      `Provide a concise summary that captures the key information from all sources:
 
 ${summaries
     .map(
@@ -459,7 +457,7 @@ Please provide a comprehensive summary that synthesizes the information from the
       }
     );
 
-    const summary = summaryResponse.choices[0]?.message?.content || "No summary available";
+    const summary = summaryResponse.choices[0]?.message?.content ?? "No summary available";
 
     return `Web Research Results for "${query}":
 
@@ -590,7 +588,8 @@ async function image_search_analysis({
     const searchResponse = await fetchWithRetry(searchUrl, {
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
       },
       timeout: CONFIG.TIMEOUTS.WEB_REQUEST
     });
@@ -615,7 +614,7 @@ async function image_search_analysis({
         } // Stop at 3 images
 
         const $img = $(element);
-        const imgUrl = $img.attr("data-src") || $img.attr("src");
+        const imgUrl = $img.attr("data-src") ?? $img.attr("src");
 
         if (imgUrl && imgUrl.startsWith("http") && !imgUrl.includes("duckduckgo.com/y.js")) {
           imageUrls.push(imgUrl);
@@ -645,7 +644,8 @@ async function image_search_analysis({
         const altResponse = await fetchWithRetry(altSearchUrl, {
           headers: {
             "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+              "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
           },
           timeout: CONFIG.TIMEOUTS.WEB_REQUEST,
           retryOptions: {
@@ -674,7 +674,8 @@ async function image_search_analysis({
     // If still no images found, use some representative sample images for the query
     if (imageUrls.length === 0) {
       console.log("No images found in search results, using fallback approach");
-      return `No images found for query "${query}". DuckDuckGo image search may be blocked or the page structure has changed. Consider using the analyze_image tool with specific image URLs instead.`;
+      return `No images found for query "${query}". DuckDuckGo image search may be blocked or the page ` +
+        "structure has changed. Consider using the analyze_image tool with specific image URLs instead.";
     }
 
     console.log(`Found ${imageUrls.length} images to analyze`);
@@ -697,7 +698,10 @@ async function image_search_analysis({
             content: [
               {
                 type: "text",
-                text: `${analysis_prompt}\n\nSearch query: "${query}"\nImage ${i + 1} of ${Math.min(imageUrls.length, 3)}:`
+                text: `${analysis_prompt}\n\nSearch query: "${query}"\nImage ${i + 1} of ${Math.min(
+                  imageUrls.length,
+                  3
+                )}:`
               },
               {
                 type: "image_url",
@@ -739,7 +743,8 @@ async function image_search_analysis({
     }
 
     // Generate combined summary using OpenAI with retry
-    const summaryPrompt = `Based on the following image analyses for the search query "${query}", provide a comprehensive summary that synthesizes insights from all images:
+    const summaryPrompt = `Based on the following image analyses for the search query "${query}", ` +
+      `provide a comprehensive summary that synthesizes insights from all images:
 
 ${analyses
     .map(
@@ -807,20 +812,21 @@ async function agent(userInput: string, workingDir: string = process.cwd()): Pro
   } catch {
     // Fallback to default system prompt if file doesn't exist
     systemPrompt =
-      "You are an AI coding assistant. First try to list the contents of the repository to understand the structure before taking actions. When you have completed the task, use the 'done' tool to summarize what you accomplished.";
+      "You are an AI coding assistant. First try to list the contents of the repository to understand the " +
+      "structure before taking actions. When you have completed the task, use the 'done' tool to summarize " +
+      "what you accomplished.";
   }
 
   // First, enhance the user prompt with more details
   console.log("--- Enhancing user prompt ---");
-  const enhancementPrompt = `Given the following system prompt context and user request, rewrite the user request to be more detailed, specific, and actionable while maintaining the original intent. Add technical details, best practices, and step-by-step guidance that would help accomplish the task effectively.
-
-System Context:
-${systemPrompt}
-
-Original User Request:
-${userInput}
-
-Please provide an enhanced, more detailed version of the user request:`;
+  // First, enhance the user prompt with more details
+  console.log("--- Enhancing user prompt ---");
+  const enhancementPrompt =
+    "Given the following system prompt context and user request, rewrite the user request to be " +
+    "more detailed, specific, and actionable while maintaining the original intent. Add technical details, " +
+    "best practices, and step-by-step guidance that would help accomplish the task effectively.\n\n" +
+    `System Context:\n${systemPrompt}\n\nOriginal User Request:\n${userInput}\n\n` +
+    "Please provide an enhanced, more detailed version of the user request:";
 
   const enhancementResponse = await openaiWithRetry(
     () =>
@@ -958,7 +964,7 @@ function parseArgs(): { repoPath: string; prompt: string } {
     process.exit(1);
   }
 
-  const repoPath = path.resolve(args[0]!);
+  const repoPath = path.resolve(args[0] as string);
   const prompt = args.slice(1).join(" ");
 
   return { repoPath, prompt };
@@ -984,5 +990,8 @@ function parseArgs(): { repoPath: string; prompt: string } {
   console.log(`Processing prompt: ${prompt}`);
   console.log("---");
 
-  void agent(prompt, repoPath);
-})();
+  await agent(prompt, repoPath);
+})().catch(error => {
+  console.error("Error running agent:", error);
+  process.exit(1);
+});
