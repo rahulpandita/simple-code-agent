@@ -9,48 +9,12 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
+import { CONFIG, type Config, type RetryOptions } from "./config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: '.env.local' });
-
 // Type definitions
-interface TimeoutConfig {
-  API_REQUEST: number;
-  WEB_REQUEST: number;
-  COMMAND_EXECUTION: number;
-  IMAGE_ANALYSIS: number;
-}
-
-interface RetryConfig {
-  MAX_ATTEMPTS: number;
-  BASE_DELAY: number;
-  MAX_DELAY: number;
-  BACKOFF_MULTIPLIER: number;
-}
-
-interface AzureConfig {
-  API_VERSION: string | undefined;
-  GPT_API_KEY: string | undefined;
-  GPT_ENDPOINT: string | undefined;
-}
-
-interface Config {
-  TIMEOUTS: TimeoutConfig;
-  RETRY: RetryConfig;
-  AZURE: AzureConfig;
-}
-
-interface RetryOptions {
-  maxAttempts?: number;
-  baseDelay?: number;
-  multiplier?: number;
-  maxDelay?: number;
-  shouldRetry?: (error: any) => boolean;
-  onRetry?: (error: any, attempt: number) => void;
-}
-
 interface FetchOptions extends RequestInit {
   timeout?: number;
   retryOptions?: RetryOptions;
@@ -101,32 +65,6 @@ interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }
-
-// Configuration constants
-const CONFIG: Config = {
-  // Timeout settings (in milliseconds)
-  TIMEOUTS: {
-    API_REQUEST: parseInt(process.env.API_TIMEOUT || "60000"),        // 60 seconds
-    WEB_REQUEST: parseInt(process.env.WEB_TIMEOUT || "30000"),        // 30 seconds
-    COMMAND_EXECUTION: parseInt(process.env.COMMAND_TIMEOUT || "120000"), // 2 minutes
-    IMAGE_ANALYSIS: parseInt(process.env.IMAGE_TIMEOUT || "90000"),   // 90 seconds
-  },
-  
-  // Retry settings
-  RETRY: {
-    MAX_ATTEMPTS: parseInt(process.env.MAX_RETRY_ATTEMPTS || "3"),
-    BASE_DELAY: parseInt(process.env.RETRY_BASE_DELAY || "1000"),     // 1 second
-    MAX_DELAY: parseInt(process.env.RETRY_MAX_DELAY || "30000"),      // 30 seconds
-    BACKOFF_MULTIPLIER: parseFloat(process.env.RETRY_BACKOFF_MULTIPLIER || "2"),
-  },
-  
-  // Azure settings
-  AZURE: {
-    API_VERSION: process.env.AZURE_API_VERSION,
-    GPT_API_KEY: process.env.AZURE_GPT_API_KEY,
-    GPT_ENDPOINT: process.env.AZURE_GPT_ENDPOINT,
-  }
-};
 
 // Utility function for exponential backoff delay
 function calculateDelay(
