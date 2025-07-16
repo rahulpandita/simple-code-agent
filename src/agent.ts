@@ -10,61 +10,26 @@ import dotenv from "dotenv";
 import fetch from "node-fetch";
 import * as cheerio from "cheerio";
 import { CONFIG, type Config, type RetryOptions } from "./config.js";
+import type {
+  FetchOptions,
+  SearchResult,
+  SearchResultWithContent,
+  ImageAnalysisResult,
+  ToolFunction,
+  Tool,
+  ToolCall,
+  Message,
+  ReadFileParams,
+  WriteFileParams,
+  RunCommandParams,
+  AnalyzeImageParams,
+  ImageSearchAnalysisParams,
+  WebresearchParams,
+  DoneParams
+} from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Type definitions
-interface FetchOptions extends RequestInit {
-  timeout?: number;
-  retryOptions?: RetryOptions;
-}
-
-interface SearchResult {
-  title: string;
-  url: string;
-  snippet: string;
-}
-
-interface SearchResultWithContent extends SearchResult {
-  content: string;
-}
-
-interface ImageAnalysisResult {
-  imageUrl: string;
-  analysis: string;
-  imageNumber: number;
-}
-
-interface ToolFunction {
-  name: string;
-  description: string;
-  parameters: {
-    type: string;
-    properties: Record<string, any>;
-    required: string[];
-  };
-}
-
-interface Tool {
-  type: "function";
-  function: ToolFunction;
-}
-
-interface ToolCall {
-  id: string;
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-interface Message {
-  role: "system" | "user" | "assistant" | "tool";
-  content?: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
-  tool_calls?: ToolCall[];
-  tool_call_id?: string;
-}
 
 // Utility function for exponential backoff delay
 function calculateDelay(
@@ -283,38 +248,6 @@ const tools: Tool[] = [
     }
   }
 ];
-
-// --- Tool parameter interfaces ---
-interface ReadFileParams {
-  path: string;
-}
-
-interface WriteFileParams {
-  path: string;
-  content: string;
-}
-
-interface RunCommandParams {
-  command: string;
-}
-
-interface AnalyzeImageParams {
-  path: string;
-  prompt?: string;
-}
-
-interface ImageSearchAnalysisParams {
-  query: string;
-  analysis_prompt?: string;
-}
-
-interface WebresearchParams {
-  query: string;
-}
-
-interface DoneParams {
-  summary: string;
-}
 
 // --- Implementations ---
 async function read_file({ path: filePath }: ReadFileParams): Promise<string> {
